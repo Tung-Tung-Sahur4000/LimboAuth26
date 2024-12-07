@@ -48,6 +48,7 @@ import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.LegacyChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.scheduler.ScheduledTask;
+import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiter;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
@@ -156,7 +157,6 @@ public class LimboAuth {
   private final Map<InetAddress, CachedBruteforceUser> bruteforceCache = new ConcurrentHashMap<>();
   private final Map<UUID, Runnable> postLoginTasks = new ConcurrentHashMap<>();
   private final Set<String> unsafePasswords = new HashSet<>();
-  private final Set<String> forcedPreviously = Collections.synchronizedSet(new HashSet<>());
   private final Set<String> pendingLogins = ConcurrentHashMap.newKeySet();
 
   private final HttpClient client = HttpClient.newBuilder()
@@ -562,7 +562,7 @@ public class LimboAuth {
 
   public void authPlayer(Player player) {
     boolean isFloodgate = !Settings.IMP.MAIN.FLOODGATE_NEED_AUTH && this.floodgateApi.isFloodgatePlayer(player.getUniqueId());
-    if (!isFloodgate && this.isForcedPreviously(player.getUsername()) && this.isPremium(player.getUsername())) {
+    if (!isFloodgate && this.isForceOfflineMode(player) && this.isPremium(player.getUsername())) {
       player.disconnect(this.reconnectKick);
       return;
     }
@@ -949,16 +949,9 @@ public class LimboAuth {
     this.bruteforceCache.remove(address);
   }
 
-  public void saveForceOfflineMode(String nickname) {
-    this.forcedPreviously.add(nickname);
-  }
-
-  public void unsetForcedPreviously(String nickname) {
-    this.forcedPreviously.remove(nickname);
-  }
-
-  public boolean isForcedPreviously(String nickname) {
-    return this.forcedPreviously.contains(nickname);
+  public boolean isForceOfflineMode(Player player) {
+    return player instanceof ConnectedPlayer connectedPlayer
+        && connectedPlayer.getConnection().getChannel().hasAttr(AuthListener.FORCE_OFFLINE_MODE);
   }
 
   public Set<String> getPendingLogins() {

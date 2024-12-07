@@ -31,6 +31,8 @@ import com.velocitypowered.api.util.UuidUtils;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.client.InitialInboundConnection;
 import com.velocitypowered.proxy.connection.client.LoginInboundConnection;
+import io.netty.channel.Channel;
+import io.netty.util.AttributeKey;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.sql.SQLException;
@@ -54,6 +56,8 @@ public class AuthListener {
 
   private static final MethodHandle DELEGATE_FIELD;
   //private static final MethodHandle LOGIN_FIELD;
+
+  public static final AttributeKey<Boolean> FORCE_OFFLINE_MODE = AttributeKey.valueOf("limboauth-force-offline-mode");
 
   private final LimboAuth plugin;
   private final Dao<RegisteredPlayer, String> playerDao;
@@ -79,16 +83,13 @@ public class AuthListener {
     }
 
     if (event.getResult().isForceOfflineMode()) {
-      String username = event.getUsername();
       try {
         MinecraftConnection connection = this.getConnection(event.getConnection());
-        if (!connection.isClosed()) {
-          this.plugin.saveForceOfflineMode(username);
-
-          // As Velocity does not have any events for our use case, just inject into netty
-          connection.getChannel().closeFuture().addListener(future -> {
-            this.plugin.unsetForcedPreviously(username);
-          });
+        if (connection != null) {
+          Channel channel = connection.getChannel();
+          if (channel != null) {
+            channel.attr(FORCE_OFFLINE_MODE).set(true);
+          }
         }
       } catch (Throwable throwable) {
         event.setResult(PreLoginComponentResult.denied(this.errorOccurred));
