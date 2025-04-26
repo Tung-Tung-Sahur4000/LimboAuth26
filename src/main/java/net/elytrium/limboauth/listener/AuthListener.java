@@ -59,6 +59,7 @@ public class AuthListener {
   private final Dao<RegisteredPlayer, String> playerDao;
   private final FloodgateApiHolder floodgateApi;
   private final Component errorOccurred;
+  private final Component failedToVerifyUsername;
 
   public AuthListener(LimboAuth plugin, Dao<RegisteredPlayer, String> playerDao, FloodgateApiHolder floodgateApi) {
     this.plugin = plugin;
@@ -66,6 +67,7 @@ public class AuthListener {
     this.floodgateApi = floodgateApi;
 
     this.errorOccurred = LimboAuth.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.ERROR_OCCURRED);
+    this.failedToVerifyUsername = LimboAuth.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.FAILED_TO_VERIFY_USERNAME);
   }
 
   @Subscribe(order = PostOrder.LATE)
@@ -105,6 +107,13 @@ public class AuthListener {
         }).start(() -> {
           String username = event.getUsername();
           if (this.plugin.isPremium(username)) {
+            if (Settings.IMP.MAIN.ALWAYS_CHECK_PREMIUM_PLAYERS
+                && this.plugin.isPremiumInternal(username.toLowerCase(Locale.ROOT)).getState() == PremiumState.ERROR) {
+              event.setResult(PreLoginComponentResult.denied(this.failedToVerifyUsername));
+              continuation.resume();
+              return;
+            }
+
             event.setResult(PreLoginComponentResult.forceOnlineMode());
 
             try {
