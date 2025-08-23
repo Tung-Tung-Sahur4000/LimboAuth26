@@ -19,7 +19,6 @@ package net.elytrium.limboauth;
 
 import com.google.common.primitives.Bytes;
 import com.google.common.primitives.Longs;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -49,14 +48,12 @@ import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.LegacyChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.scheduler.ScheduledTask;
-import com.velocitypowered.proxy.plugin.loader.VelocityPluginContainer;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiter;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import io.whitfin.siphash.SipHasher;
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -79,8 +76,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -238,25 +233,6 @@ public class LimboAuth {
     metrics.addCustomChart(new SimplePie("dimension", () -> String.valueOf(Settings.IMP.MAIN.DIMENSION)));
     metrics.addCustomChart(new SimplePie("save_uuid", () -> String.valueOf(Settings.IMP.MAIN.SAVE_UUID)));
     metrics.addCustomChart(new SingleLineChart("registered_players", () -> Math.toIntExact(this.playerDao.countOf())));
-
-    VelocityPluginContainer container = (VelocityPluginContainer) this.server.getPluginManager().getPlugin("limboauth").get();
-    try {
-      Field serviceField = container.getClass().getDeclaredField("service");
-      serviceField.setAccessible(true);
-      ExecutorService executor = (ExecutorService) serviceField.get(container);
-      ExecutorService newExecutor = Executors.unconfigurableExecutorService(
-          Executors.newCachedThreadPool(new ThreadFactoryBuilder().setThreadFactory(Thread.ofVirtual().factory())
-              .setNameFormat("LimboAuth - Task Executor #%d").setDaemon(true).build()));
-      serviceField.set(container, newExecutor);
-
-      if (executor != null) {
-        executor.shutdown();
-      }
-
-      LOGGER.info("Successfully replaced LimboAuth task executor with virtual-threads based executor.");
-    } catch (Throwable throwable) {
-      throw new IllegalStateException("failed to use virtual threads", throwable);
-    }
 
     this.server.getScheduler().buildTask(this, () -> {
       if (!UpdatesChecker.checkVersionByURL("https://raw.githubusercontent.com/Elytrium/LimboAuth/master/VERSION", Settings.IMP.VERSION)) {
