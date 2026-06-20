@@ -19,6 +19,7 @@ package net.elytrium.limboauth.listener;
 
 import com.j256.ormlite.dao.Dao;
 import com.j256.ormlite.stmt.UpdateBuilder;
+import com.velocitypowered.api.event.Continuation;
 import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
@@ -30,6 +31,8 @@ import com.velocitypowered.api.util.UuidUtils;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.client.InitialInboundConnection;
 import com.velocitypowered.proxy.connection.client.LoginInboundConnection;
+import io.netty.channel.Channel;
+import io.netty.util.AttributeKey;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.sql.SQLException;
@@ -54,10 +57,13 @@ public class AuthListener {
   private static final MethodHandle DELEGATE_FIELD;
   //private static final MethodHandle LOGIN_FIELD;
 
+  public static final AttributeKey<Boolean> FORCE_OFFLINE_MODE = AttributeKey.valueOf("limboauth-force-offline-mode");
+
   private final LimboAuth plugin;
   private final Dao<RegisteredPlayer, String> playerDao;
   private final FloodgateApiHolder floodgateApi;
   private final Component errorOccurred;
+  private final Component failedToVerifyUsername;
 
   public AuthListener(LimboAuth plugin, Dao<RegisteredPlayer, String> playerDao, FloodgateApiHolder floodgateApi) {
     this.plugin = plugin;
@@ -65,63 +71,78 @@ public class AuthListener {
     this.floodgateApi = floodgateApi;
 
     this.errorOccurred = LimboAuth.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.ERROR_OCCURRED);
+    this.failedToVerifyUsername = LimboAuth.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.FAILED_TO_VERIFY_USERNAME);
   }
 
   @Subscribe(order = PostOrder.LATE)
-  public void onPreLoginEvent(PreLoginEvent event) {
-    // Ignore this event if it is was denied by other plugin
+  public void onPreLoginEvent(PreLoginEvent event, Continuation continuation) {
+    // Ignore this event if it was denied by another plugin
     if (!event.getResult().isAllowed()) {
+      continuation.resume();
       return;
     }
 
-    try {
-      String username = event.getUsername();
-      if (!event.getResult().isForceOfflineMode()) {
-        if (this.plugin.isPremium(username)) {
-          event.setResult(PreLoginEvent.PreLoginComponentResult.forceOnlineMode());
-
-          try {
-            if (!Settings.IMP.MAIN.ONLINE_MODE_NEED_AUTH_STRICT) {
-              CachedPremiumUser premiumUser = this.plugin.getPremiumCache(username);
-              MinecraftConnection connection = this.getConnection(event.getConnection());
-              if (!connection.isClosed() && premiumUser != null && !premiumUser.isForcePremium()
-                  && this.plugin.isPremiumInternal(username.toLowerCase(Locale.ROOT)).getState() == PremiumState.UNKNOWN) {
-                this.plugin.getPendingLogins().add(username);
-
-                // As Velocity doesnt have any events for our usecase, just inject into netty
-                connection.getChannel().closeFuture().addListener(future -> {
-                  // Player has failed premium verfication client-side, mark as offline-mode
-                  if (this.plugin.getPendingLogins().remove(username)) {
-                    this.plugin.setPremiumCacheLowercased(username.toLowerCase(Locale.ROOT), false);
-                  }
-                });
-              }
-            }
-          } catch (Throwable throwable) {
-            throw new IllegalStateException("failed to track authentication process", throwable);
+    if (event.getResult().isForceOfflineMode()) {
+      try {
+        MinecraftConnection connection = this.getConnection(event.getConnection());
+        if (connection != null) {
+          Channel channel = connection.getChannel();
+          if (channel != null) {
+            channel.attr(FORCE_OFFLINE_MODE).set(true);
           }
-        } else {
-          event.setResult(PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
         }
-      } else {
-        try {
-          MinecraftConnection connection = this.getConnection(event.getConnection());
-          if (!connection.isClosed()) {
-            this.plugin.saveForceOfflineMode(username);
-
-            // As Velocity doesnt have any events for our usecase, just inject into netty
-            connection.getChannel().closeFuture().addListener(future -> {
-              this.plugin.unsetForcedPreviously(username);
-            });
-          }
-        } catch (Throwable throwable) {
-          throw new IllegalStateException("failed to track client disconnection", throwable);
-        }
+      } catch (Throwable throwable) {
+        event.setResult(PreLoginComponentResult.denied(this.errorOccurred));
+        continuation.resumeWithException(new IllegalStateException("failed to track client disconnection", throwable));
+        return;
       }
-    } catch (Throwable throwable) {
-      event.setResult(PreLoginComponentResult.denied(this.errorOccurred));
-      throw throwable;
+
+      continuation.resume();
+      return;
     }
+
+    Thread.ofVirtual().name("LimboAuth - PreLoginEvent handler")
+        .uncaughtExceptionHandler((t, e) -> {
+          event.setResult(PreLoginComponentResult.denied(this.errorOccurred));
+          continuation.resumeWithException(e);
+        }).start(() -> {
+          String username = event.getUsername();
+          if (this.plugin.isPremium(username)) {
+            if (Settings.IMP.MAIN.ALWAYS_CHECK_PREMIUM_PLAYERS
+                && this.plugin.isPremiumInternal(username.toLowerCase(Locale.ROOT)).getState() == PremiumState.ERROR) {
+              event.setResult(PreLoginComponentResult.denied(this.failedToVerifyUsername));
+              continuation.resume();
+              return;
+            }
+
+            event.setResult(PreLoginComponentResult.forceOnlineMode());
+
+            try {
+              if (!Settings.IMP.MAIN.ONLINE_MODE_NEED_AUTH_STRICT) {
+                CachedPremiumUser premiumUser = this.plugin.getPremiumCache(username);
+                MinecraftConnection connection = this.getConnection(event.getConnection());
+                if (!connection.isClosed() && premiumUser != null && !premiumUser.isForcePremium()
+                    && this.plugin.isPremiumInternal(username.toLowerCase(Locale.ROOT)).getState() == PremiumState.UNKNOWN) {
+                  this.plugin.getPendingLogins().add(username);
+
+                  // As Velocity does not have any events for our use case, just inject into netty
+                  connection.getChannel().closeFuture().addListener(future -> {
+                    // Player has failed premium verification client-side, mark as offline-mode
+                    if (this.plugin.getPendingLogins().remove(username)) {
+                      this.plugin.setPremiumCacheLowercased(username.toLowerCase(Locale.ROOT), false);
+                    }
+                  });
+                }
+              }
+            } catch (Throwable throwable) {
+              throw new IllegalStateException("failed to track authentication process", throwable);
+            }
+          } else {
+            event.setResult(PreLoginComponentResult.forceOfflineMode());
+          }
+
+          continuation.resume();
+        });
   }
 
   private MinecraftConnection getConnection(InboundConnection inbound) throws Throwable {

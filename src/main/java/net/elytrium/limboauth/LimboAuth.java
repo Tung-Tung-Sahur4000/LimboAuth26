@@ -48,6 +48,7 @@ import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.LegacyChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.scheduler.ScheduledTask;
+import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiter;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
@@ -66,6 +67,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -142,6 +144,8 @@ public class LimboAuth {
   // Architectury API appends /541f59e4256a337ea252bc482a009d46 to the channel name, that is a UUID.nameUUIDFromBytes from the TokenMessage class name
   private static final ChannelIdentifier MOD_CHANNEL = MinecraftChannelIdentifier.create("limboauth", "mod/541f59e4256a337ea252bc482a009d46");
   private static final ChannelIdentifier LEGACY_MOD_CHANNEL = new LegacyChannelIdentifier("LIMBOAUTH|MOD");
+  private static final int TIMEOUT_SECONDS = Integer.getInteger("limboauth.http.timeout", 15);
+  private static final Duration TIMEOUT_DURATION = Duration.ofSeconds(TIMEOUT_SECONDS);
 
   @MonotonicNonNull
   private static Logger LOGGER;
@@ -153,10 +157,10 @@ public class LimboAuth {
   private final Map<InetAddress, CachedBruteforceUser> bruteforceCache = new ConcurrentHashMap<>();
   private final Map<UUID, Runnable> postLoginTasks = new ConcurrentHashMap<>();
   private final Set<String> unsafePasswords = new HashSet<>();
-  private final Set<String> forcedPreviously = Collections.synchronizedSet(new HashSet<>());
   private final Set<String> pendingLogins = ConcurrentHashMap.newKeySet();
 
-  private final HttpClient client = HttpClient.newHttpClient();
+  private final HttpClient client = HttpClient.newBuilder()
+      .connectTimeout(TIMEOUT_DURATION).build();
 
   private final ProxyServer server;
   private final Metrics.Factory metricsFactory;
@@ -558,7 +562,7 @@ public class LimboAuth {
 
   public void authPlayer(Player player) {
     boolean isFloodgate = !Settings.IMP.MAIN.FLOODGATE_NEED_AUTH && this.floodgateApi.isFloodgatePlayer(player.getUniqueId());
-    if (!isFloodgate && this.isForcedPreviously(player.getUsername()) && this.isPremium(player.getUsername())) {
+    if (!isFloodgate && this.isForceOfflineMode(player) && this.isPremium(player.getUsername())) {
       player.disconnect(this.reconnectKick);
       return;
     }
@@ -720,12 +724,13 @@ public class LimboAuth {
 
   public PremiumResponse isPremiumExternal(String nickname) {
     try {
-      HttpResponse<String> response = this.client.send(
+      HttpResponse<String> response = this.client.sendAsync(
           HttpRequest.newBuilder()
               .uri(URI.create(String.format(Settings.IMP.MAIN.ISPREMIUM_AUTH_URL, URLEncoder.encode(nickname, StandardCharsets.UTF_8))))
+              .timeout(TIMEOUT_DURATION)
               .build(),
           HttpResponse.BodyHandlers.ofString()
-      );
+      ).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
       int statusCode = response.statusCode();
 
@@ -733,7 +738,14 @@ public class LimboAuth {
         return new PremiumResponse(PremiumState.RATE_LIMIT);
       }
 
-      JsonElement jsonElement = JsonParser.parseString(response.body());
+      String responseBody = response.body();
+      JsonElement jsonElement;
+      try {
+        jsonElement = JsonParser.parseString(responseBody);
+      } catch (Throwable throwable) {
+        LOGGER.error("Mojang API responded with invalid json: " + responseBody, throwable);
+        return new PremiumResponse(PremiumState.ERROR);
+      }
 
       if (Settings.IMP.MAIN.STATUS_CODE_USER_EXISTS.contains(statusCode)
           && this.validateScheme(jsonElement, Settings.IMP.MAIN.USER_EXISTS_JSON_VALIDATOR_FIELDS)) {
@@ -773,6 +785,27 @@ public class LimboAuth {
       }
 
       if (this.playerDao.countOf(premiumCountQuery.prepare()) != 0) {
+        if (Settings.IMP.MAIN.ALWAYS_CHECK_PREMIUM_PLAYERS) {
+          RegisteredPlayer player = AuthSessionHandler.fetchInfo(this.playerDao, nickname);
+          if (player == null) {
+            // Database got broken?
+            return new PremiumResponse(PremiumState.ERROR);
+          }
+
+          if (!player.getPremiumUuid().isEmpty()) {
+            PremiumResponse response = this.isPremiumExternal(nickname);
+            if (response.uuid == null) {
+              // Got rate-limited or something failed.
+              return new PremiumResponse(PremiumState.ERROR);
+            }
+
+            if (!response.uuid.toString().equals(player.getPremiumUuid())) {
+              // Something got broken or account is being hijacked.
+              return new PremiumResponse(PremiumState.ERROR);
+            }
+          }
+        }
+
         return new PremiumResponse(PremiumState.PREMIUM);
       }
 
@@ -923,16 +956,9 @@ public class LimboAuth {
     this.bruteforceCache.remove(address);
   }
 
-  public void saveForceOfflineMode(String nickname) {
-    this.forcedPreviously.add(nickname);
-  }
-
-  public void unsetForcedPreviously(String nickname) {
-    this.forcedPreviously.remove(nickname);
-  }
-
-  public boolean isForcedPreviously(String nickname) {
-    return this.forcedPreviously.contains(nickname);
+  public boolean isForceOfflineMode(Player player) {
+    return player instanceof ConnectedPlayer connectedPlayer
+        && connectedPlayer.getConnection().getChannel().hasAttr(AuthListener.FORCE_OFFLINE_MODE);
   }
 
   public Set<String> getPendingLogins() {
