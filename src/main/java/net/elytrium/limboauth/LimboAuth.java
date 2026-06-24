@@ -561,7 +561,8 @@ public class LimboAuth {
   }
 
   public void authPlayer(Player player) {
-    boolean isFloodgate = !Settings.IMP.MAIN.FLOODGATE_NEED_AUTH && this.floodgateApi.isFloodgatePlayer(player.getUniqueId());
+    boolean isFloodgatePlayer = this.floodgateApi != null && this.floodgateApi.isFloodgatePlayer(player.getUniqueId());
+    boolean isFloodgate = !Settings.IMP.MAIN.FLOODGATE_NEED_AUTH && isFloodgatePlayer;
     if (!isFloodgate && this.isForceOfflineMode(player) && this.isPremium(player.getUsername())) {
       player.disconnect(this.reconnectKick);
       return;
@@ -573,7 +574,11 @@ public class LimboAuth {
     }
 
     String nickname = player.getUsername();
-    if (!this.nicknameValidationPattern.matcher((isFloodgate) ? nickname.substring(this.floodgateApi.getPrefixLength()) : nickname).matches()) {
+    // Geyser/Floodgate (Bedrock) players are allowed to bypass the nickname regex, since their usernames can contain
+    // spaces and other characters (plus the Floodgate prefix) that the regex would otherwise reject.
+    boolean skipNicknameValidation = isFloodgatePlayer && Settings.IMP.MAIN.FLOODGATE_SKIP_NICKNAME_VALIDATION;
+    if (!skipNicknameValidation
+        && !this.nicknameValidationPattern.matcher((isFloodgate) ? nickname.substring(this.floodgateApi.getPrefixLength()) : nickname).matches()) {
       player.disconnect(this.nicknameInvalidKick);
       return;
     }
