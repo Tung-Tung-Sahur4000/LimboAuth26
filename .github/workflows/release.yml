@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to create and publish (e.g. v1.1.14)"
+        required: true
+        default: v1.1.14
 
 permissions:
   contents: write
@@ -41,7 +47,7 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: LimboAuth ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
+          name: LimboAuth ${{ github.event.inputs.version || github.ref_name }}
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
           generate_release_notes: true
           files: ${{ steps.jar.outputs.path }}
