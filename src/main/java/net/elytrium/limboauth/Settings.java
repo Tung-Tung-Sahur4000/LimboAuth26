@@ -90,13 +90,6 @@ public class Settings extends YamlConfig {
     public boolean ONLINE_MODE_NEED_AUTH_STRICT = true;
     @Comment("Needs floodgate plugin if disabled.")
     public boolean FLOODGATE_NEED_AUTH = true;
-    @Comment({
-        "Skip the 'allowed-nickname-regex' check for Geyser/Floodgate (Bedrock) players.",
-        "Bedrock usernames may contain spaces and other characters (plus the Floodgate prefix) that the regex forbids,",
-        "so they would otherwise be kicked with 'Your nickname contains forbidden characters'.",
-        "Requires the floodgate plugin to detect Bedrock players."
-    })
-    public boolean FLOODGATE_SKIP_NICKNAME_VALIDATION = true;
     @Comment("TOTALLY disables hybrid auth feature")
     public boolean FORCE_OFFLINE_MODE = false;
     @Comment("Forces all players to get offline uuid")

@@ -574,11 +574,9 @@ public class LimboAuth {
     }
 
     String nickname = player.getUsername();
-    // Geyser/Floodgate (Bedrock) players are allowed to bypass the nickname regex, since their usernames can contain
-    // spaces and other characters (plus the Floodgate prefix) that the regex would otherwise reject.
-    boolean skipNicknameValidation = isFloodgatePlayer && Settings.IMP.MAIN.FLOODGATE_SKIP_NICKNAME_VALIDATION;
-    if (!skipNicknameValidation
-        && !this.nicknameValidationPattern.matcher((isFloodgate) ? nickname.substring(this.floodgateApi.getPrefixLength()) : nickname).matches()) {
+    // Strip the Floodgate username prefix before validation for any Bedrock player (regardless of FLOODGATE_NEED_AUTH),
+    // since the prefix is the only part of their name that the regex would reject (spaces are already replaced by Floodgate).
+    if (!this.nicknameValidationPattern.matcher(isFloodgatePlayer ? nickname.substring(this.floodgateApi.getPrefixLength()) : nickname).matches()) {
       player.disconnect(this.nicknameInvalidKick);
       return;
     }
