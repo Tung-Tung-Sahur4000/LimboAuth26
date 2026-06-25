@@ -1,52 +1,53 @@
-name: Java CI with Gradle
+name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to create and publish (e.g. v1.1.14)"
+        required: true
+        default: v1.1.14
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
-      - name: Set up JDK
-        uses: actions/setup-java@v4.7.0
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
         with:
-          distribution: adopt
+          distribution: temurin
           java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Build LimboAuth
         run: ./gradlew build
-      - name: Upload LimboAuth
-        uses: actions/upload-artifact@v4.6.2
-        with:
-          name: LimboAuth
-          path: "build/libs/limboauth*.jar"
-      - name: Find correct JAR
-        id: find-jar
+
+      - name: Locate plugin JAR
+        id: jar
         run: |
-          output="$(find build/libs/ ! -name "*-javadoc.jar" ! -name "*-sources.jar" -type f -printf "%f\n")"
-          echo "::set-output name=jarname::$output"
-      - name: Upload to the GitHub release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          jar="$(find build/libs -maxdepth 1 -name 'limboauth-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)"
+          if [ -z "$jar" ]; then
+            echo "No plugin JAR found in build/libs" >&2
+            exit 1
+          fi
+          echo "Found plugin JAR: $jar"
+          echo "path=$jar" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: build/libs/${{ steps.find-jar.outputs.jarname }}
-          asset_name: ${{ steps.find-jar.outputs.jarname }}
-          asset_content_type: application/java-archive
-      - name: Upload to Modrinth
-        uses: RubixDev/modrinth-upload@v1.0.0
-        with:
-          token: ${{ secrets.MODRINTH_TOKEN }}
-          file_path: build/libs/${{ steps.find-jar.outputs.jarname }}
-          name: Release ${{ github.event.release.tag_name }}
-          version: ${{ github.event.release.tag_name }}
-          changelog: ${{ github.event.release.body }}
-          relations: TZOteSf2:required
-          game_versions: 1.7.2
-          release_type: release
-          loaders: velocity
-          featured: true
-          project_id: 4iChqdl8
+          name: LimboAuth ${{ github.event.inputs.version || github.ref_name }}
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          generate_release_notes: true
+          files: ${{ steps.jar.outputs.path }}
