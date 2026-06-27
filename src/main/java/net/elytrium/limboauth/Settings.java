@@ -118,7 +118,10 @@ public class Settings extends YamlConfig {
     public boolean CHANGE_PASSWORD_NEED_OLD_PASSWORD = true;
     @Comment("Used in unregister and premium commands.")
     public String CONFIRM_KEYWORD = "confirm";
-    @Comment("This prefix will be added to offline mode players nickname")
+    @Comment({
+        "This prefix will be added to offline mode players nickname",
+        "Geyser/Bedrock (Floodgate) players are not tagged with this prefix, even though they connect in offline mode."
+    })
     public String OFFLINE_MODE_PREFIX = "";
     @Comment("This prefix will be added to online mode players nickname")
     public String ONLINE_MODE_PREFIX = "";
